@@ -1,7 +1,12 @@
 ESP32 ESP-NOW to Wi-Fi Gateway
 ==================================================
 Receive ESP-NOW sensor data and forward to Wi-Fi on a single ESP32 board.
-[ 1. THE PROBLEM ]
+[ 1. HARDWARE NEEDED ]
+--------------------------------------------------
+* 1x ESP32 (as Gateway / Receiver + Wi-Fi Bridge)
+* 1x ESP32 or ESP8266 (as Sensor Node / Transmitter)
+* USB cables for flashing & serial monitoring
+[ 2. THE PROBLEM (WHY OTHERS FAIL) ]
 --------------------------------------------------
 When you try to run ESP-NOW and Wi-Fi together on one ESP32, you will usually face two issues:
 * Problem A: Packets Never Arrive
@@ -11,8 +16,8 @@ When you try to run ESP-NOW and Wi-Fi together on one ESP32, you will usually fa
   - No error logs, just silent packet drops.
 * Problem B: ESP32 Crashes & Reboots
   - Sending HTTP/MQTT requests directly inside `OnDataRecv()` callback crashes the Wi-Fi stack.
-  - Callbacks run on interrupt level, so heavy tasks must be handled in `loop()`.
-[ 2. HOW IT WORKS ]
+  - Callbacks run on interrupt level, so heavy tasks must be handled safely inside `loop()`.
+[ 3. HOW IT WORKS ]
 --------------------------------------------------
 * GATEWAY:
   1. Connects to the Wi-Fi router first.
@@ -24,7 +29,7 @@ When you try to run ESP-NOW and Wi-Fi together on one ESP32, you will usually fa
   1. Does NOT need the Wi-Fi router password.
   2. Forces its radio channel to match the Gateway's router channel.
   3. Sends sensor data via ESP-NOW every 5 seconds.
-[ 3. SHARED DATA STRUCTURE ]
+[ 4. SHARED DATA STRUCTURE ]
 --------------------------------------------------
 Both `Gateway_ESP32.ino` and `Sensor_Node.ino` must use the exact same struct:
 ```cpp
@@ -35,7 +40,7 @@ typedef struct struct_message {
   int battery_level;
 } struct_message;
 ```
-[ 4. STEP-BY-STEP SETUP ]
+[ 5. STEP-BY-STEP SETUP ]
 --------------------------------------------------
 STEP 1: Upload the Gateway Code
 - Open `Gateway_ESP32.ino`.
@@ -48,11 +53,23 @@ STEP 2: Upload the Sensor Code
 - Open `Sensor_Node.ino`.
 - Match the channel number with your Gateway:
     #define WIFI_CHANNEL 6
+- (Optional) Set MAC Address:
+  Default uses Broadcast `{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}`.
+  You can also use your Gateway's specific MAC Address for better security.
 - Flash to your Sensor ESP32.
 STEP 3: Verify Data
-- Open Serial Monitor on Gateway ESP32.
-- Data from the sensor will start flowing in every 5 seconds smoothly!
-[ 5. IMPORTANT NOTE: ROUTER CHANNELS ]
+- Open Serial Monitor on Gateway ESP32. You will see this:
+  === ESP-NOW to Wi-Fi Gateway ===
+  Connecting to Wi-Fi..... [OK]
+  IP Gateway: 192.168.1.150
+  Operating Radio Channel: 6
+  [OK] ESP-NOW Receiver Ready!
+  --- Incoming Data from Sensor ---
+  Node ID     : 1
+  Temperature : 28.50 C
+  Humidity    : 65.00 %
+  Battery     : 92 %
+[ 6. IMPORTANT NOTE: ROUTER CHANNELS ]
 --------------------------------------------------
 If your home router is set to "Auto Channel", it might automatically hop channels (e.g. from 6 to 11). If that happens, the sensor will lose connection.
 To fix this:

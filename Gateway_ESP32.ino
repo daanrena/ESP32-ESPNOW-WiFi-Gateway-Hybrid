@@ -1,12 +1,15 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_task_wdt.h>  // 1. Library Watchdog anti-hang
 
-// Konfigurasi Wi-Fi Router Rumah / Kantor
+#define WDT_TIMEOUT 15     // Reset otomatis jika sistem freeze > 15 detik
+
+// Konfigurasi Wi-Fi Router
 const char* ssid = "NAMA_WIFI_ROUTER";
 const char* password = "PASSWORD_WIFI";
 
-// Struktur data yang dikirim dan diterima (HARUS SAMA di kedua alat)
+// Struktur data (Wajib sama persis dengan sensor)
 typedef struct struct_message {
   int node_id;
   float temperature;
@@ -15,25 +18,28 @@ typedef struct struct_message {
 } struct_message;
 
 struct_message incomingData;
-
-// Buffer agar pemrosesan tidak menabrak interupsi Wi-Fi (Anti-Crash)
 volatile bool newDataAvailable = false;
 
-// Callback saat data ESP-NOW diterima
-// Kompatibel dengan ESP32 Board Manager versi baru maupun lama
+// Timer non-blocking untuk cek Wi-Fi (anti delay)
+unsigned long lastWiFiCheck = 0;
+const unsigned long wifiCheckInterval = 10000; // Cek tiap 10 detik
+
+// Callback ESP-NOW
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
   memcpy(&incomingData, data, sizeof(incomingData));
-  newDataAvailable = true; // Set flag untuk diproses di void loop
+  newDataAvailable = true; // Setel bendera untuk diproses di loop
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
 
-  Serial.println("\n=== ESP-NOW to Wi-Fi Gateway ===");
+  Serial.println("\n=== ESP-NOW to Wi-Fi Gateway 24/7 ===");
 
-  // 1. Konek ke Wi-Fi Router
+  // 1. Setup Wi-Fi
   WiFi.mode(WIFI_AP_STA);
+  WiFi.setAutoReconnect(true); // Fitur otomatis ESP32 untuk nyambung lagi kalau putus
+  WiFi.setSleep(false);        // Radio selalu aktif penuh, sensitivitas penerimaan maksimal
   WiFi.begin(ssid, password);
 
   Serial.print("Menghubungkan ke Wi-Fi");
@@ -49,24 +55,31 @@ void setup() {
     Serial.print("IP Gateway: ");
     Serial.println(WiFi.localIP());
     Serial.print("Operating Radio Channel: ");
-    Serial.println(WiFi.channel()); // Channel yang dipaksakan oleh Router
+    Serial.println(WiFi.channel()); // Channel ini yang harus disamakan di Sensor Node
   } else {
-    Serial.println("\n[WARN] Wi-Fi tidak terhubung, berjalan di mode offline.");
+    Serial.println("\n[WARN] Wi-Fi gagal konek saat boot, tetap lanjut mode offline.");
   }
 
   // 2. Inisialisasi ESP-NOW
   if (esp_now_init() != ESP_OK) {
-    Serial.println("[ERROR] Gagal inisialisasi ESP-NOW!");
-    return;
+    Serial.println("[ERROR] Gagal inisialisasi ESP-NOW, me-restart...");
+    ESP.restart(); // Auto-recovery
   }
 
-  // Daftarkan callback penerima
   esp_now_register_recv_cb(OnDataRecv);
-  Serial.println("[OK] ESP-NOW Receiver Siap Mendengarkan!");
+  Serial.println("[OK] ESP-NOW Siap Menerima Data!");
+
+  // 3. Aktifkan Hardware Watchdog
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL);
+  Serial.println("[OK] Watchdog 24/7 Siap.");
 }
 
 void loop() {
-  // Proses data hanya di loop (bukan di dalam interupsi callback)
+  // Reset watchdog timer tiap siklus (tanda sistem sehat)
+  esp_task_wdt_reset();
+
+  // 1. Tangani data yang masuk dari Node Sensor
   if (newDataAvailable) {
     newDataAvailable = false;
 
@@ -76,13 +89,19 @@ void loop() {
     Serial.printf("Kelembapan  : %.2f %%\n", incomingData.humidity);
     Serial.printf("Baterai     : %d %%\n", incomingData.battery_level);
 
-    // Di sini Anda bisa teruskan ke MQTT, Firebase, atau HTTP Request
-    // Contoh: sendToMQTT(incomingData);
+    // Di sini tempat aman buat kirim ke MQTT, Firebase, atau Web API
+    // Tidak akan bikin crash karena dieksekusi di loop(), bukan di interupsi
   }
 
-  // Auto-reconnect Wi-Fi jika koneksi router sempat drop
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.reconnect();
-    delay(5000);
+  // 2. Pengecekan Wi-Fi tanpa 'delay()' (Non-blocking)
+  if (millis() - lastWiFiCheck >= wifiCheckInterval) {
+    lastWiFiCheck = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[INFO] Wi-Fi terputus, mencoba rekoneksi...");
+      WiFi.reconnect();
+    }
   }
+
+  // Berikan waktu jeda mikro untuk background task FreeRTOS
+  delay(10);
 }
